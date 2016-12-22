@@ -229,9 +229,9 @@ def parse_query(query):
 
     def content(tokens):
         subtokens = tokens[1].split('/')
-        if (len(tokens) == 2):
+        if (len(subtokens) == 2):
             return 'op/AND&contenttype/'+subtokens[0]+'&contentsubtype/'+subtokens[1]
-        elif (len(tokens) == 1):
+        elif (len(subtokens) == 1):
             return 'contenttype/'+subtokens[0]
 
     def acl(tokens):
@@ -272,7 +272,7 @@ def parse_query(query):
 
 def search(args):
     s3 = S3(Config())
-    query = str(S3Uri(args[1]).path())
+    query = str(S3Uri(args[0]).path())
     if len(args) > 1:
         uri = S3Uri(args[0])
         if uri.type == "s3" and uri.has_bucket():
