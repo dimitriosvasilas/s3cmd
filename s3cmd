@@ -127,6 +127,165 @@ def cmd_ls(args):
     subcmd_all_buckets_list(s3)
     return EX_OK
 
+def parse_query(query):
+    def expr_parse(str):
+        def expr_parse_helper(level=0):
+            try:
+                token = next(tokens)
+            except StopIteration:
+                if level != 0:
+                    raise ParameterError("parenthesis in query don't match")
+                else:
+                    return []
+            if token == ')':
+                if level == 0:
+                    raise ParameterError("parenthesis in query don't match")
+                else:
+                    return []
+            elif token == '(':
+                return [expr_parse_helper(level+1)] + expr_parse_helper(level)
+            else:
+                return [token] + expr_parse_helper(level)
+        tokens = iter(str)
+        return expr_parse_helper()
+
+    def create_rpn(arr):
+        def create_rpn_helper(arr):
+            stack = []
+            if (len(arr) == 3):
+                stack.append(arr[1])
+                stack += create_rpn_helper(arr[0])
+                stack += create_rpn_helper(arr[2])
+            elif (len(arr) == 2):
+                stack.append(arr[0])
+                stack = stack + create_rpn_helper(arr[1])
+            else:
+                term = ''.join(arr)
+                if ('&' in term):
+                    term = term.split('&')
+                    stack.append('&')
+                    stack.append(term[0])
+                    stack.append(term[1])
+                elif ('|' in term):
+                    term = term.split('|')
+                    stack.append('|')
+                    stack.append(term[0])
+                    stack.append(term[1])
+                elif ('!' in term):
+                    term = term.split('!')
+                    stack.append('!')
+                    stack.append(term[0])
+                else:
+                    stack.append(term)
+            return stack
+        return create_rpn_helper(arr)
+
+    query = filter(lambda x: x != ' ', query)
+    query = expr_parse(query)
+    if (len(query) == 1):
+        query = create_rpn(query[0])
+    else:
+        query = create_rpn(query)
+
+    def x_amz_meta(tokens):
+        return 'x-amz-meta/'+tokens[1]
+
+    def fileSize(tokens):
+        if (tokens[1][1] == '='):
+            operator = tokens[1][0]+tokens[1][1]
+            value = tokens[1][2:]
+        else:
+            operator = tokens[1][0]
+            value = tokens[1][1:]
+        if (tokens[1][len(tokens[1])-1] == 'B'):
+            if (tokens[1][len(tokens[1])-2] == 'K'):
+                return 'filesize/'+operator+'/'+str(int(value[:len(value)-2])*1024)
+            elif (tokens[1][len(tokens[1])-2] == 'M'):
+                return 'filesize/'+operator+'/'+str(int(value[:len(value)-2])*1024*1024)
+            elif (tokens[1][len(tokens[1])-2] == 'G'):
+                return 'filesize/'+operator+'/'+str(int(value[:len(value)-2])*1024*1024*1024)
+            else:
+                return 'filesize/'+operator+'/'+value[:len(value)-1]
+        else:
+            raise ParameterError("expected multiple of bytes (B/KM/MB/GB)")
+
+    def modificationDate(tokens):
+        if (tokens[1][2] == '='):
+            operator = tokens[1][1]+tokens[1][2]
+            value = tokens[1][3:]
+        else:
+            operator = tokens[1][1]
+            value = tokens[1][2:]
+        if (tokens[1][0] == 'y'):
+            return 'modificationdate-year/'+operator+'/'+value
+        elif (tokens[1][0] == 'm'):
+            return 'modificationdate-month/'+operator+'/'+value
+        elif (tokens[1][0] == 'd'):
+            return 'modificationdate-day/'+operator+'/'+value
+        elif (tokens[1][0] == 'h'):
+            return 'modificationdate-hours/'+operator+'/'+value
+        elif (tokens[1][0] == 'n'):
+            return 'modificationdate-minutes/'+operator+'/'+value
+
+    def content(tokens):
+        subtokens = tokens[1].split('/')
+        if (len(tokens) == 2):
+            return 'op/AND&contenttype/'+subtokens[0]+'&contentsubtype/'+subtokens[1]
+        elif (len(tokens) == 1):
+            return 'contenttype/'+subtokens[0]
+
+    def acl(tokens):
+        if (tokens[1] == 'private' or tokens[1] == 'public-read' or tokens[1] == 'authenticated-read'):
+            return 'acl/Canned/'+tokens[1]
+        elif (tokens[1] == 'full-control'):
+            return 'acl/FULL_CONTROL/'+term[2]
+
+    def AND(tokens):
+        return 'op/AND'
+
+    def OR(tokens):
+        return 'op/OR'
+
+    def NOT(tokens):
+        return 'op/NOT'
+
+    def queryError(tokens):
+        raise ParameterError("invalid search attribute")
+
+    search_options = {
+        'tag': x_amz_meta,
+        'size': fileSize,
+        'date': modificationDate,
+        'content': content,
+        'acl': acl,
+        '&': AND,
+        '|': OR,
+        '!': NOT
+    }
+
+    header=""
+    for token in query:
+        subtokens = token.split(':')
+        func = search_options.get(subtokens[0], queryError)
+        header += func(subtokens) + '&'
+    return header[:len(header)-1]
+
+def search(args):
+    s3 = S3(Config())
+    query = str(S3Uri(args[1]).path())
+    if len(args) > 1:
+        uri = S3Uri(args[0])
+        if uri.type == "s3" and uri.has_bucket():
+            subcmd_bucket_list(s3, uri, cfg.limit, parse_query(query))
+            return EX_OK
+
+    response = s3.list_all_buckets()
+
+    for bucket in response["list"]:
+        subcmd_bucket_list(s3, S3Uri("s3://" + bucket["Name"]), cfg.limit, parse_query(query))
+        output(u"")
+    return EX_OK
+
 def subcmd_all_buckets_list(s3):
 
     response = s3.list_all_buckets()
@@ -145,7 +304,7 @@ def cmd_all_buckets_list_all_content(args):
         output(u"")
     return EX_OK
 
-def subcmd_bucket_list(s3, uri, limit):
+def subcmd_bucket_list(s3, uri, limit, query = None):
     bucket = uri.bucket()
     prefix = uri.object()
 
@@ -153,7 +312,7 @@ def subcmd_bucket_list(s3, uri, limit):
     if prefix.endswith('*'):
         prefix = prefix[:-1]
     try:
-        response = s3.bucket_list(bucket, prefix = prefix, limit = limit)
+        response = s3.bucket_list(bucket, prefix = prefix, limit = limit, query = query)
     except S3Error, e:
         if S3.codes.has_key(e.info["Code"]):
             error(S3.codes[e.info["Code"]] % bucket)
@@ -2379,6 +2538,7 @@ def get_commands_list():
     {"cmd":"mb", "label":"Make bucket", "param":"s3://BUCKET", "func":cmd_bucket_create, "argc":1},
     {"cmd":"rb", "label":"Remove bucket", "param":"s3://BUCKET", "func":cmd_bucket_delete, "argc":1},
     {"cmd":"ls", "label":"List objects or buckets", "param":"[s3://BUCKET[/PREFIX]]", "func":cmd_ls, "argc":0},
+    {"cmd":"search", "label":"search for object based on metadata", "param":"[s3://BUCKET[/PREFIX]]", "func":search, "argc":1},
     {"cmd":"la", "label":"List all object in all buckets", "param":"", "func":cmd_all_buckets_list_all_content, "argc":0},
     {"cmd":"put", "label":"Put file into bucket", "param":"FILE [FILE...] s3://BUCKET[/PREFIX]", "func":cmd_object_put, "argc":2},
     {"cmd":"get", "label":"Get file from bucket", "param":"s3://BUCKET/OBJECT LOCAL_FILE", "func":cmd_object_get, "argc":1},

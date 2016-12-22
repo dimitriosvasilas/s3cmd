@@ -313,10 +313,10 @@ class S3(object):
         response["list"] = getListFromXml(response["data"], "Bucket")
         return response
 
-    def bucket_list(self, bucket, prefix = None, recursive = None, uri_params = {}, limit = -1):
+    def bucket_list(self, bucket, prefix = None, recursive = None, uri_params = {}, limit = -1, query = None):
         item_list = []
         prefixes = []
-        for truncated, dirs, objects in self.bucket_list_streaming(bucket, prefix, recursive, uri_params, limit):
+        for truncated, dirs, objects in self.bucket_list_streaming(bucket, prefix, recursive, uri_params, limit, query):
             item_list.extend(objects)
             prefixes.extend(dirs)
 
@@ -326,7 +326,7 @@ class S3(object):
         response['truncated'] = truncated
         return response
 
-    def bucket_list_streaming(self, bucket, prefix = None, recursive = None, uri_params = {}, limit = -1):
+    def bucket_list_streaming(self, bucket, prefix = None, recursive = None, uri_params = {}, limit = -1, query = None):
         """ Generator that produces <dir_list>, <object_list> pairs of groups of content of a specified bucket. """
         def _list_truncated(data):
             ## <IsTruncated> can either be "true" or "false" or be missing completely
@@ -347,7 +347,7 @@ class S3(object):
         num_prefixes = 0
         max_keys = limit
         while truncated:
-            response = self.bucket_list_noparse(bucket, prefix, recursive, uri_params, max_keys)
+            response = self.bucket_list_noparse(bucket, prefix, recursive, uri_params, max_keys, query)
             current_list = _get_contents(response["data"])
             current_prefixes = _get_common_prefixes(response["data"])
             num_objects += len(current_list)
@@ -368,14 +368,17 @@ class S3(object):
 
             yield truncated, current_prefixes, current_list
 
-    def bucket_list_noparse(self, bucket, prefix = None, recursive = None, uri_params = {}, max_keys = -1):
+    def bucket_list_noparse(self, bucket, prefix = None, recursive = None, uri_params = {}, max_keys = -1, query = None):
         if prefix:
             uri_params['prefix'] = self.urlencode_string(prefix)
         if not self.config.recursive and not recursive:
             uri_params['delimiter'] = "/"
         if max_keys != -1:
             uri_params['max-keys'] = str(max_keys)
-        request = self.create_request("BUCKET_LIST", bucket = bucket, **uri_params)
+        headers = {}
+        if query:
+            headers['query'] = query
+        request = self.create_request("BUCKET_LIST", bucket = bucket, headers = headers, **uri_params)
         response = self.send_request(request)
         #debug(response)
         return response
