@@ -274,7 +274,7 @@ def search(args):
     s3 = S3(Config())
     query = str(S3Uri(args[0]).path())
     if len(args) > 1:
-        uri = S3Uri(args[0])
+        uri = S3Uri(args[1])
         if uri.type == "s3" and uri.has_bucket():
             subcmd_bucket_list(s3, uri, cfg.limit, parse_query(query))
             return EX_OK
