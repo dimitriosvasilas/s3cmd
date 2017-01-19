@@ -188,7 +188,7 @@ def parse_query(query):
         query = create_rpn(query)
 
     def x_amz_meta(tokens):
-        return 'x-amz-meta/'+tokens[1]
+        return 'tags/'+tokens[1]
 
     def fileSize(tokens):
         if (tokens[1][1] == '='):
@@ -239,6 +239,8 @@ def parse_query(query):
             return 'acl/Canned/'+tokens[1]
         elif (tokens[1] == 'full-control'):
             return 'acl/FULL_CONTROL/'+term[2]
+        elif (tokens[1] == 'public'):
+            return 'acl/Canned/'
 
     def AND(tokens):
         return 'op/AND'
@@ -311,8 +313,10 @@ def subcmd_bucket_list(s3, uri, limit, query = None):
     debug(u"Bucket 's3://%s':" % bucket)
     if prefix.endswith('*'):
         prefix = prefix[:-1]
+    if query:
+        prefix += "//" + query
     try:
-        response = s3.bucket_list(bucket, prefix = prefix, limit = limit, query = query)
+        response = s3.bucket_list(bucket, prefix = prefix, limit = limit)
     except S3Error, e:
         if S3.codes.has_key(e.info["Code"]):
             error(S3.codes[e.info["Code"]] % bucket)
